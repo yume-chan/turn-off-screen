@@ -4,12 +4,15 @@ import android.annotation.SuppressLint;
 import android.os.IBinder;
 import android.util.Log;
 
+import dalvik.system.PathClassLoader;
+
 public class Main {
     private static void log(String value) {
         System.out.println(value);
         Log.d("Test", value);
     }
 
+    @SuppressLint({"PrivateApi", "SoonBlockedPrivateApi", "DiscouragedPrivateApi", "BlockedPrivateApi"})
     public static void main(String[] args) {
         try {
             log("Start");
@@ -20,11 +23,16 @@ public class Main {
             }
             log("Mode: " + mode);
 
-            System.loadLibrary("android_servers");
-            log("Loaded libandroiod_servers.so");
+            var classLoaderFactoryClass = Class.forName("com.android.internal.os.ClassLoaderFactory");
+            var createClassLoaderMethod = classLoaderFactoryClass.getDeclaredMethod("createClassLoader", String.class, String.class, String.class, ClassLoader.class, int.class, boolean.class, String.class);
+            var classLoader = (PathClassLoader) createClassLoaderMethod.invoke(null, "/system/framework/services.jar", "", "", null, 34, true, null);
 
-            @SuppressLint("PrivateApi") var displayControlClass = Class.forName("com.android.server.display.DisplayControl");
+            var displayControlClass = classLoader.loadClass("com.android.server.display.DisplayControl");
             log("displayControlClass: " + displayControlClass);
+
+            var loadLibraryMethod = Runtime.class.getDeclaredMethod("loadLibrary0", Class.class, String.class);
+            loadLibraryMethod.setAccessible(true);
+            loadLibraryMethod.invoke(Runtime.getRuntime(), displayControlClass, "android_servers");
 
             var getPhysicalDisplayIdsMethod = displayControlClass.getDeclaredMethod("getPhysicalDisplayIds");
             log("getPhysicalDisplayIdsMethod: " + getPhysicalDisplayIdsMethod);
