@@ -1,10 +1,21 @@
 package com.example.test;
 
 import android.annotation.SuppressLint;
+import android.annotation.TargetApi;
+import android.content.AttributionSource;
+import android.content.Context;
+import android.content.ContextWrapper;
+import android.os.Build;
 import android.os.IBinder;
+import android.os.Looper;
+import android.os.Parcel;
+import android.os.Process;
+import android.os.RemoteException;
 import android.util.Log;
 
-import dalvik.system.PathClassLoader;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 
 public class Main {
     private static void log(String value) {
@@ -21,45 +32,96 @@ public class Main {
             if (args.length == 1) {
                 mode = Integer.parseInt(args[0]);
             }
-            log("Mode: " + mode);
 
-            var classLoaderFactoryClass = Class.forName("com.android.internal.os.ClassLoaderFactory");
-            var createClassLoaderMethod = classLoaderFactoryClass.getDeclaredMethod("createClassLoader", String.class, String.class, String.class, ClassLoader.class, int.class, boolean.class, String.class);
-            var classLoader = (PathClassLoader) createClassLoaderMethod.invoke(null, "/system/framework/services.jar", "", "", null, 34, true, null);
-
-            var displayControlClass = classLoader.loadClass("com.android.server.display.DisplayControl");
-            log("displayControlClass: " + displayControlClass);
-
-            var loadLibraryMethod = Runtime.class.getDeclaredMethod("loadLibrary0", Class.class, String.class);
-            loadLibraryMethod.setAccessible(true);
-            loadLibraryMethod.invoke(Runtime.getRuntime(), displayControlClass, "android_servers");
-
-            var getPhysicalDisplayIdsMethod = displayControlClass.getDeclaredMethod("getPhysicalDisplayIds");
-            log("getPhysicalDisplayIdsMethod: " + getPhysicalDisplayIdsMethod);
-
-            var getPhysicalDisplayTokenMethod = displayControlClass.getDeclaredMethod("getPhysicalDisplayToken", long.class);
-            log("getPhysicalDisplayTokenMethod: " + getPhysicalDisplayTokenMethod);
-
-            var surfaceControlClass = Class.forName("android.view.SurfaceControl");
-            log("surfaceControlClass: " + surfaceControlClass);
-
-            @SuppressLint("SoonBlockedPrivateApi") var setDisplayPowerModeMethod = surfaceControlClass.getDeclaredMethod("setDisplayPowerMode", IBinder.class, int.class);
-            log("setDisplayPowerModeMethod: " + setDisplayPowerModeMethod);
-
-            var displayIds = (long[]) getPhysicalDisplayIdsMethod.invoke(null);
-            log("displayIds.length: " + displayIds.length);
+            var surfaceComposer = SurfaceComposer.getInstance();
+            long[] displayIds = surfaceComposer.getPhysicalDisplayIds();
 
             for (long displayId : displayIds) {
                 log("displayId: " + displayId);
-
-                var token = (IBinder) getPhysicalDisplayTokenMethod.invoke(null, displayId);
-                log("token: " + token);
-
-                setDisplayPowerModeMethod.invoke(null, token, mode);
-                log("setDisplayPowerMode success");
+                surfaceComposer.setPowerMode(displayId, mode);
             }
+
         } catch (Throwable e) {
             e.printStackTrace();
+        }
+    }
+
+    // https://cs.android.com/android/platform/superproject/main/+/main:frameworks/native/libs/gui/aidl/android/gui/ISurfaceComposer.aidl
+    static class SurfaceComposer {
+        private static SurfaceComposer instance;
+        private final IBinder surfaceComposer;
+
+        @SuppressLint({"PrivateApi", "SoonBlockedPrivateApi", "DiscouragedPrivateApi", "BlockedPrivateApi"})
+        private SurfaceComposer() {
+            try {
+                var serviceManagerClass = Class.forName("android.os.ServiceManager");
+                var getServiceMethod = serviceManagerClass.getDeclaredMethod("getService", String.class);
+                surfaceComposer = (IBinder) getServiceMethod.invoke(null, "SurfaceFlingerAIDL");
+            } catch (Exception e) {
+                throw new AssertionError(e);
+            }
+        }
+
+        public static SurfaceComposer getInstance() {
+            if (instance == null) {
+                instance = new SurfaceComposer();
+            }
+            return instance;
+        }
+
+        public long[] getPhysicalDisplayIds() {
+            var data = Parcel.obtain();
+            var reply = Parcel.obtain();
+            try {
+                data.writeInterfaceToken("android.gui.ISurfaceComposer");
+                surfaceComposer.transact(IBinder.FIRST_CALL_TRANSACTION + 5, data, reply, 0);
+                reply.readException();
+                return reply.createLongArray();
+            } catch (RemoteException e) {
+                throw new RuntimeException(e);
+            } finally {
+                data.recycle();
+                reply.recycle();
+            }
+        }
+
+        public IBinder getPhysicalDisplayToken(long displayId) {
+            var data = Parcel.obtain();
+            var reply = Parcel.obtain();
+            try {
+                data.writeInterfaceToken("android.gui.ISurfaceComposer");
+                data.writeLong(displayId);
+                surfaceComposer.transact(IBinder.FIRST_CALL_TRANSACTION + 6, data, reply, 0);
+                reply.readException();
+                return reply.readStrongBinder();
+            } catch (RemoteException e) {
+                throw new RuntimeException(e);
+            } finally {
+                data.recycle();
+                reply.recycle();
+            }
+        }
+
+        public void setPowerMode(IBinder display, int mode) {
+            var data = Parcel.obtain();
+            var reply = Parcel.obtain();
+            try {
+                data.writeInterfaceToken("android.gui.ISurfaceComposer");
+                data.writeStrongBinder(display);
+                data.writeInt(mode);
+                surfaceComposer.transact(IBinder.FIRST_CALL_TRANSACTION + 8, data, reply, 0);
+                reply.readException();
+            } catch (RemoteException e) {
+                throw new RuntimeException(e);
+            } finally {
+                data.recycle();
+                reply.recycle();
+            }
+        }
+
+        public void setPowerMode(long displayId, int mode) {
+            var token = getPhysicalDisplayToken(displayId);
+            setPowerMode(token, mode);
         }
     }
 }
